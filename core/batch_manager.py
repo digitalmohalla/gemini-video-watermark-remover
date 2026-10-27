@@ -307,6 +307,7 @@ class BatchManager:
         item.progress_pct = 0.0
         item.status_msg = "Starting engine..."
         self._broadcast("item_updated", item.to_dict())
+        self._broadcast("queue_updated", self.get_state())
 
         out_path = self.resolve_output_path(item.input_path)
         item.output_path = str(out_path)
@@ -399,6 +400,7 @@ class BatchManager:
             item.status_msg = f"Error: {item.error_message}"
 
         self._broadcast("item_updated", item.to_dict())
+        self._broadcast("queue_updated", self.get_state())
 
     def create_zip_from_completed(self) -> Optional[str]:
         """Bundle all completed videos into a ZIP archive."""

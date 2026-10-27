@@ -114,10 +114,23 @@ function connectSSE() {
 function handleSSEMessage(msg) {
   const { type, data } = msg;
 
-  if (type === "init" || type === "queue_updated") {
+  if (type === "init") {
     batchState = data;
     queueItems = data.items || [];
     renderQueue();
+    updateBatchStats();
+  } else if (type === "queue_updated") {
+    batchState = data;
+    const newItems = data.items || [];
+    if (newItems.length !== queueItems.length) {
+      queueItems = newItems;
+      renderQueue();
+    } else {
+      queueItems = newItems;
+      for (const it of newItems) {
+        updateCardItem(it);
+      }
+    }
     updateBatchStats();
   } else if (type === "item_progress") {
     updateCardProgress(data);
@@ -130,21 +143,27 @@ function handleSSEMessage(msg) {
   } else if (type === "log") {
     addLog(data);
   } else if (type === "batch_started") {
+    batchState.is_running = true;
     btnStartBatch.style.display = "none";
-    btnStartBanner.style.display = "none";
+    if (btnStartBanner) btnStartBanner.style.display = "none";
     btnPauseBatch.style.display = "inline-flex";
     btnCancelBatch.style.display = "inline-flex";
+    updateBatchStats();
   } else if (type === "batch_paused") {
+    batchState.is_running = false;
     btnStartBatch.style.display = "inline-flex";
     btnStartBatch.innerHTML = `<svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Resume`;
-    btnStartBanner.style.display = "inline-flex";
+    if (btnStartBanner) btnStartBanner.style.display = "inline-flex";
     btnPauseBatch.style.display = "none";
+    updateBatchStats();
   } else if (type === "batch_finished" || type === "batch_cancelled") {
+    batchState.is_running = false;
     btnStartBatch.style.display = "inline-flex";
     btnStartBatch.innerHTML = `<svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Start Batch`;
-    btnStartBanner.style.display = "inline-flex";
+    if (btnStartBanner) btnStartBanner.style.display = "inline-flex";
     btnPauseBatch.style.display = "none";
     btnCancelBatch.style.display = "none";
+    updateBatchStats();
   } else if (type === "zip_created") {
     btnDownloadZip.style.display = "inline-flex";
     showToast("📦 ZIP Archive created successfully!", "success");
@@ -393,6 +412,12 @@ function renderQueue() {
 
 // Real-time Card Progress Update
 function updateCardProgress(item) {
+  // Update in-memory queue item
+  const idx = queueItems.findIndex(i => i.id === item.id);
+  if (idx !== -1) {
+    queueItems[idx] = { ...queueItems[idx], ...item };
+  }
+
   const pfill = document.getElementById(`pfill-${item.id}`);
   const msg = document.getElementById(`msg-${item.id}`);
   const badge = document.getElementById(`badge-${item.id}`);
@@ -407,6 +432,12 @@ function updateCardProgress(item) {
 
 // Card status update
 function updateCardItem(item) {
+  // Update in-memory queue item
+  const idx = queueItems.findIndex(i => i.id === item.id);
+  if (idx !== -1) {
+    queueItems[idx] = { ...queueItems[idx], ...item };
+  }
+
   const card = document.getElementById(`card-${item.id}`);
   if (card) {
     const badge = document.getElementById(`badge-${item.id}`);
@@ -453,13 +484,28 @@ function updateThumbnail(id, b64) {
 }
 
 // Update Batch Progress and Counts
-function updateBatchStats() {
-  const total = batchState.total_count || queueItems.length;
-  const completed = batchState.completed_count || queueItems.filter(i => i.status === "completed").length;
-  const pending = batchState.pending_count || queueItems.filter(i => i.status === "pending").length;
-  const failed = batchState.failed_count || queueItems.filter(i => i.status === "error").length;
-  const overall = batchState.overall_progress_pct || 0;
-  const isRunning = batchState.is_running || false;
+function updateBatchStats(stateOverride) {
+  if (stateOverride && typeof stateOverride === "object") {
+    batchState = { ...batchState, ...stateOverride };
+  }
+
+  // Always compute directly from the live queueItems array!
+  const total = queueItems.length;
+  const completed = queueItems.filter(i => i.status === "completed").length;
+  const processing = queueItems.filter(i => i.status === "processing").length;
+  const failed = queueItems.filter(i => i.status === "error").length;
+  const pending = queueItems.filter(i => i.status === "pending").length;
+
+  let overall = 0;
+  if (total > 0) {
+    const completedSum = completed * 100.0;
+    const activeSum = queueItems
+      .filter(i => i.status === "processing")
+      .reduce((acc, it) => acc + (it.progress_pct || 0), 0);
+    overall = Math.min(100, Math.round(((completedSum + activeSum) / total) * 10) / 10);
+  }
+
+  const isRunning = batchState.is_running || processing > 0;
 
   statTotal.innerText = total;
   statCompleted.innerText = completed;
@@ -474,13 +520,13 @@ function updateBatchStats() {
 
   // Dynamic feedback when files are loaded
   if (total > 0) {
-    dropzoneTitle.innerText = `📁 ${total} Videos Loaded in Batch`;
+    dropzoneTitle.innerText = `📁 ${total} Videos & Images in Batch`;
     dropzoneSubtitle.innerText = `Click "Process All Videos Now" below, or drop more files to append to queue.`;
 
     if (selectionBanner) {
       selectionBanner.style.display = "flex";
-      selBadgeCount.innerText = `${total} Videos`;
-      selTitleText.innerText = `${total} Videos Selected (${totalMb.toFixed(1)} MB)`;
+      selBadgeCount.innerText = `${total} Items`;
+      selTitleText.innerText = `${total} Items Loaded (${totalMb.toFixed(1)} MB)`;
       selSubtitleText.innerText = `${pending} pending, ${completed} completed, ${failed} failed.`;
     }
 
@@ -492,8 +538,8 @@ function updateBatchStats() {
       if (btnStartBanner) btnStartBanner.classList.remove("pulse-glow");
     }
   } else {
-    dropzoneTitle.innerText = "Drop Gemini / Veo Videos Here (1 to 100s)";
-    dropzoneSubtitle.innerText = "Supports MP4, MOV, WebM, MKV · Drag & drop files or use the native Windows file picker";
+    dropzoneTitle.innerText = "Drop Gemini / Veo Videos & Images Here (1 to 100s)";
+    dropzoneSubtitle.innerText = "Supports MP4, MOV, WebM, MKV, PNG, JPG, WEBP · Drag & drop files or use the native Windows file picker";
     if (selectionBanner) selectionBanner.style.display = "none";
     btnStartBatch.classList.remove("pulse-glow");
   }
@@ -508,6 +554,37 @@ function updateBatchStats() {
     }
   }
 }
+
+// Periodic synchronization fallback to ensure UI counters never lag or miss state
+setInterval(async () => {
+  const isRunning = batchState.is_running || queueItems.some(i => i.status === "processing" || i.status === "pending");
+  if (isRunning) {
+    try {
+      const res = await fetch("/api/queue");
+      if (res.ok) {
+        const data = await res.json();
+        batchState = data;
+        if (data.items) {
+          let changed = false;
+          for (const remoteIt of data.items) {
+            const localIt = queueItems.find(i => i.id === remoteIt.id);
+            if (localIt) {
+              if (localIt.status !== remoteIt.status || localIt.progress_pct !== remoteIt.progress_pct) {
+                updateCardItem(remoteIt);
+                changed = true;
+              }
+            }
+          }
+          if (changed) {
+            updateBatchStats();
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore background fetch hiccup
+    }
+  }
+}, 2000);
 
 // Open Windows Explorer
 async function openExplorer(path) {
