@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini & Veo Video Watermark Remover</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="logo-container">
+      <div class="logo-badge">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
+        </svg>
+      </div>
+      <div class="logo-text">
+        <h1>Gemini & Veo Video Watermark Remover</h1>
+        <p>100% Local · Reverse Alpha Blending · Pixel-Exact Restoration · No Server Upload</p>
+      </div>
+    </div>
+
+    <div class="header-badges">
+      <div class="chip chip-gpu" id="gpu-chip">
+        <span class="chip-dot"></span>
+        <span id="gpu-name">Detecting GPU...</span>
+      </div>
+      <div class="chip" id="engine-chip">
+        <span class="chip-dot"></span>
+        <span>Native C++ GPU Engine</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <div class="app-container">
+
+    <!-- Dropzone & File Pickers -->
+    <div class="dropzone-container glass" id="dropzone">
+      <div class="dropzone-icon" id="dropzone-icon">
+        <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+        </svg>
+      </div>
+      <div class="dropzone-text">
+        <h3 id="dropzone-title">Drop Gemini / Veo Videos Here (1 to 100s)</h3>
+        <p id="dropzone-subtitle">Supports MP4, MOV, WebM, MKV · Drag & drop files or use the native Windows file picker</p>
+      </div>
+      <div class="dropzone-buttons">
+        <button class="btn btn-primary" id="btn-pick-files">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          Select Videos (Windows Dialog)
+        </button>
+        <button class="btn btn-secondary" id="btn-pick-folder">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          Scan Entire Folder
+        </button>
+      </div>
+    </div>
+
+    <!-- Active Selection Summary Banner -->
+    <div class="selection-banner" id="selection-banner">
+      <div class="selection-info">
+        <span class="selection-badge" id="sel-badge-count">0 Videos</span>
+        <div>
+          <div class="selection-title" id="sel-title-text">0 Videos Selected & Ready</div>
+          <div class="selection-subtitle" id="sel-subtitle-text">Total size: 0 MB · Ready for batch reverse-alpha watermark removal</div>
+        </div>
+      </div>
+      <button class="btn btn-primary pulse-glow" id="btn-start-banner">
+        <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        Process All Videos Now
+      </button>
+    </div>
+
+    <!-- Output & Algorithm Settings -->
+    <div class="settings-panel glass">
+      <div class="settings-header" id="settings-toggle">
+        <h4>
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          Processing & Destination Settings
+        </h4>
+        <span id="settings-arrow">▼</span>
+      </div>
+
+      <div class="settings-grid" id="settings-body">
+        <!-- Destination Option -->
+        <div class="form-group">
+          <label>Save Destination</label>
+          <select class="form-control" id="dest-type">
+            <option value="same_folder">Same folder as original video</option>
+            <option value="downloads">Windows Downloads folder</option>
+            <option value="custom">Custom folder...</option>
+          </select>
+        </div>
+
+        <!-- Custom Destination Input -->
+        <div class="form-group" id="custom-dest-group" style="display: none;">
+          <label>Custom Output Path</label>
+          <div class="form-row">
+            <input type="text" class="form-control" id="custom-dest-input" placeholder="Select destination..." readonly>
+            <button class="btn btn-secondary btn-sm" id="btn-browse-dest">Browse</button>
+          </div>
+        </div>
+
+        <!-- Engine Choice -->
+        <div class="form-group">
+          <label>Algorithm Engine</label>
+          <select class="form-control" id="engine-select">
+            <option value="native">Native C++ GPU Engine (Ultra-Fast 40+ FPS, Recommended)</option>
+            <option value="python">Python Frame Pipeline (Extract, Clean, Re-encode)</option>
+          </select>
+        </div>
+
+        <!-- Watermark Mark Type -->
+        <div class="form-group">
+          <label>Watermark Profile</label>
+          <select class="form-control" id="mark-select">
+            <option value="auto">Auto-Detect (Diamond & Veo text)</option>
+            <option value="diamond">Gemini Diamond / Star (Gemini 3.5)</option>
+            <option value="veo">Google Veo (Text Wordmark)</option>
+          </select>
+        </div>
+
+        <!-- AI Denoising -->
+        <div class="form-group">
+          <label>Compression Noise Cleanup</label>
+          <select class="form-control" id="denoise-select">
+            <option value="ai">AI Denoise (NCNN Vulkan GPU - Cleans Edge Noise)</option>
+            <option value="off">Off (Pure Reverse Alpha Blending)</option>
+            <option value="soft">Soft Feather Filter</option>
+            <option value="ns">Navier-Stokes Edge Blend</option>
+            <option value="telea">Telea Inpaint Blend</option>
+          </select>
+        </div>
+
+        <!-- File Options -->
+        <div class="form-group">
+          <label>Output Subfolder / Suffix</label>
+          <div class="form-row">
+            <input type="text" class="form-control" id="suffix-input" value="_clean" style="width: 100px;" title="Filename suffix">
+            <label class="form-checkbox">
+              <input type="checkbox" id="subfolder-check">
+              Save in 'cleaned_videos/'
+            </label>
+          </div>
+          <label class="form-checkbox" style="margin-top: 8px;">
+            <input type="checkbox" id="auto-zip-check">
+            📦 Auto-create ZIP archive when all videos finish
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Batch Summary & Action Banner -->
+    <div class="batch-status-banner glass">
+      <div class="banner-top">
+        <div class="stats-group">
+          <div class="stat-item">
+            <span class="stat-val" id="stat-total">0</span>
+            <span class="stat-lbl">Total Videos</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-val" id="stat-completed" style="color: var(--success);">0</span>
+            <span class="stat-lbl">Completed</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-val" id="stat-pending" style="color: var(--accent-cyan);">0</span>
+            <span class="stat-lbl">Pending</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-val" id="stat-failed" style="color: var(--danger);">0</span>
+            <span class="stat-lbl">Failed</span>
+          </div>
+        </div>
+
+        <div class="batch-actions" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+          <button class="btn btn-primary" id="btn-start-batch">
+            <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            Start Batch
+          </button>
+          <button class="btn btn-warning btn-sm" id="btn-retry-failed" style="display: none; background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.4); color: #fcd34d;">
+            🔄 Retry Failed (<span id="failed-retry-count">0</span>)
+          </button>
+          <button class="btn btn-secondary" id="btn-pause-batch" style="display: none;">
+            <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            Pause
+          </button>
+          <button class="btn btn-danger btn-sm" id="btn-cancel-batch" style="display: none;">
+            Cancel
+          </button>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-queue">
+            Clear Queue
+          </button>
+          <button class="btn btn-success btn-sm" id="btn-download-zip" style="display: none;">
+            📦 Download ZIP
+          </button>
+        </div>
+      </div>
+
+      <!-- Batch Overall Progress Track -->
+      <div>
+        <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 4px;">
+          <span>Batch Progress</span>
+          <span id="batch-progress-text">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="batch-progress-bar" style="width: 0%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Video Queue Cards -->
+    <div class="queue-section">
+      <div class="queue-header">
+        <h3 class="queue-title">Videos Queue (<span id="queue-count">0</span>)</h3>
+      </div>
+      <div class="queue-container" id="queue-list">
+        <div class="empty-queue glass">
+          <p>No videos added yet. Click <strong>"Select Videos"</strong> or drag video files above.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Logs Section -->
+    <div class="logs-section glass">
+      <div class="logs-header" id="logs-toggle">
+        <h4 style="font-size: 0.88rem; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          Live Algorithm Activity & Logs
+        </h4>
+        <span id="logs-arrow" style="font-size: 0.8rem;">▼</span>
+      </div>
+      <div class="logs-content" id="logs-terminal">
+        <p>[System] Initializing Gemini Watermark Remover Engine...</p>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

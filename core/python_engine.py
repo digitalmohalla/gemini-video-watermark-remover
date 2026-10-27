@@ -1,0 +1,296 @@
+"""
+Python Frame-by-Frame Reverse-Alpha Video Engine.
+Extracts frames, performs deterministic reverse alpha blending with
+temporal consistency, and streams frames directly to FFmpeg with lossless audio muxing.
+"""
+
+import os
+import sys
+import time
+import subprocess
+from pathlib import Path
+from typing import Optional, Callable, Dict, Any, Tuple
+
+import cv2
+import numpy as np
+
+from .utils import get_ffmpeg_path, get_base_dir
+
+
+class PythonFrameEngine:
+    """
+    Python fallback engine that extracts frames, applies calibrated
+    reverse alpha blending, and rebuilds the video using FFmpeg.
+    """
+
+    def __init__(self):
+        self.ffmpeg_path = get_ffmpeg_path()
+        self.assets_dir = get_base_dir() / "core" / "assets"
+        self._cancelled = False
+        self._current_ffmpeg_proc: Optional[subprocess.Popen] = None
+
+        # Load calibrated alpha maps
+        self.alpha_48 = self._load_alpha_map(self.assets_dir / "bg_48.png")
+        self.alpha_96 = self._load_alpha_map(self.assets_dir / "bg_96.png")
+
+    def _load_alpha_map(self, path: Path) -> Optional[np.ndarray]:
+        if not path.exists():
+            return None
+        img = cv2.imread(str(path))
+        if img is None:
+            return None
+        gray = np.max(img, axis=2) if len(img.shape) == 3 else img
+        return gray.astype(np.float32) / 255.0
+
+    def cancel(self):
+        """Cancel running processing."""
+        self._cancelled = True
+        if self._current_ffmpeg_proc:
+            try:
+                self._current_ffmpeg_proc.terminate()
+                self._current_ffmpeg_proc.kill()
+            except Exception:
+                pass
+
+    def detect_watermark_roi(
+        self, cap: cv2.VideoCapture, width: int, height: int, total_frames: int
+    ) -> Tuple[int, int, int, int, np.ndarray]:
+        """
+        Probe sample frames across the video to locate the watermark
+        in the bottom-right corner and select optimal alpha map.
+        """
+        # Determine base watermark size
+        if width > 1024 and height > 1024:
+            size = 96
+            margin = 64
+            alpha = self.alpha_96
+        else:
+            size = 48
+            margin = 32
+            alpha = self.alpha_48
+
+        # Fallback synthetic alpha mask if assets missing
+        if alpha is None:
+            y, x = np.ogrid[:size, :size]
+            c = size // 2
+            dist = np.sqrt((x - c)**2 + (y - c)**2)
+            alpha = np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5
+
+        # Standard expected location
+        x = max(0, width - size - margin)
+        y = max(0, height - size - margin)
+
+        # Probe up to 6 frames across the video to refine coordinates
+        probe_indices = [
+            int(total_frames * r) for r in [0.2, 0.4, 0.5, 0.6, 0.8]
+            if 0 < int(total_frames * r) < total_frames
+        ]
+        if not probe_indices:
+            probe_indices = [0]
+
+        best_x, best_y = x, y
+        best_corr = -1.0
+
+        search_w = min(size + 60, width - 1)
+        search_h = min(size + 60, height - 1)
+        sx = width - search_w
+        sy = height - search_h
+
+        alpha_u8 = (alpha * 255).astype(np.uint8)
+
+        for f_idx in probe_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+
+            search_region = frame[sy:sy + search_h, sx:sx + search_w]
+            gray_sr = cv2.cvtColor(search_region, cv2.COLOR_BGR2GRAY)
+
+            # Normalized Cross Correlation template match
+            res = cv2.matchTemplate(gray_sr, alpha_u8, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+            if max_val > best_corr and max_val > 0.35:
+                best_corr = max_val
+                best_x = sx + max_loc[0]
+                best_y = sy + max_loc[1]
+
+        return best_x, best_y, size, size, alpha
+
+    def _reverse_alpha_blend(
+        self, roi: np.ndarray, alpha_map: np.ndarray, logo_val: float = 255.0
+    ) -> np.ndarray:
+        """
+        Apply exact inverse alpha blending formula:
+        Original = (Watermarked - Alpha * Logo) / (1 - Alpha)
+        """
+        roi_f = roi.astype(np.float32)
+        alpha_3d = np.expand_dims(alpha_map, axis=2)
+
+        # Upper limit to prevent division by zero
+        clamped_alpha = np.minimum(alpha_3d, 0.96)
+        one_minus = 1.0 - clamped_alpha
+
+        restored = (roi_f - clamped_alpha * logo_val) / one_minus
+
+        # Apply mask where alpha is significant
+        mask = alpha_map >= 0.005
+        out = roi_f.copy()
+        for c in range(3):
+            out[:, :, c] = np.where(mask, restored[:, :, c], roi_f[:, :, c])
+
+        return np.clip(out, 0, 255).astype(np.uint8)
+
+    def process_video(
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback: Optional[Callable[[float, int, int, float, str], None]] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Process video frame-by-frame and mux audio with FFmpeg."""
+        self._cancelled = False
+        in_p = Path(input_path).resolve()
+        out_p = Path(output_path).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+
+        if not in_p.exists():
+            return {"status": "error", "message": f"Input file not found: {in_p}"}
+
+        cap = cv2.VideoCapture(str(in_p))
+        if not cap.isOpened():
+            return {"status": "error", "message": "Failed to open video file"}
+
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        if log_callback:
+            log_callback(f"Video opened: {width}x{height} @ {fps:.2f}fps, {total_frames} frames")
+
+        # Step 1: Detect fixed watermark position
+        wx, wy, ww, wh, alpha = self.detect_watermark_roi(cap, width, height, total_frames)
+        if log_callback:
+            log_callback(f"Watermark locked at ({wx}, {wy}) size {ww}x{wh}")
+
+        # Reset capture position to beginning
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        # Prepare FFmpeg rawvideo pipe command:
+        # Takes uncompressed raw BGR24 frames from stdin, encodes to H.264,
+        # copies original audio track directly from input_path.
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
+
+        ffmpeg_cmd = [
+            str(self.ffmpeg_path),
+            "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{width}x{height}",
+            "-pix_fmt", "bgr24",
+            "-r", f"{fps}",
+            "-i", "-",                     # Stdin for processed video stream
+            "-i", str(in_p),               # Secondary input for original audio
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "fast",
+            "-crf", "18",                  # Visually near-lossless
+            "-map", "0:v:0",               # Map video from stdin
+            "-map", "1:a:0?",              # Map audio if present
+            "-c:a", "copy",                # Copy audio without re-encoding
+            "-shortest",
+            str(out_p),
+        ]
+
+        try:
+            self._current_ffmpeg_proc = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except Exception as e:
+            cap.release()
+            return {"status": "error", "message": f"Failed to start FFmpeg: {e}"}
+
+        start_time = time.time()
+        frame_idx = 0
+
+        try:
+            while cap.isOpened():
+                if self._cancelled:
+                    break
+
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    break
+
+                # Extract and clean ROI
+                roi = frame[wy:wy + wh, wx:wx + ww]
+                if roi.shape[0] == wh and roi.shape[1] == ww:
+                    cleaned_roi = self._reverse_alpha_blend(roi, alpha)
+                    frame[wy:wy + wh, wx:wx + ww] = cleaned_roi
+
+                # Write processed raw frame bytes to FFmpeg stdin
+                try:
+                    self._current_ffmpeg_proc.stdin.write(frame.tobytes())
+                except (BrokenPipeError, OSError):
+                    break
+
+                frame_idx += 1
+
+                # Report progress periodically (every 5 frames or final frame)
+                if frame_idx % 5 == 0 or frame_idx == total_frames:
+                    elapsed = time.time() - start_time
+                    cur_fps = round(frame_idx / elapsed, 1) if elapsed > 0 else 0.0
+                    pct = round((frame_idx / total_frames) * 100.0, 1) if total_frames > 0 else 0.0
+
+                    if progress_callback:
+                        progress_callback(
+                            pct,
+                            frame_idx,
+                            total_frames,
+                            cur_fps,
+                            f"Python Engine: frame {frame_idx}/{total_frames} ({pct:.0f}%)",
+                        )
+
+            cap.release()
+            if self._current_ffmpeg_proc and self._current_ffmpeg_proc.stdin:
+                self._current_ffmpeg_proc.stdin.close()
+                self._current_ffmpeg_proc.wait()
+
+            if self._cancelled:
+                if out_p.exists():
+                    try:
+                        out_p.unlink()
+                    except Exception:
+                        pass
+                return {"status": "cancelled", "message": "Processing cancelled"}
+
+            if not out_p.exists() or out_p.stat().st_size == 0:
+                return {"status": "error", "message": "FFmpeg failed to produce output file"}
+
+            total_time = round(time.time() - start_time, 2)
+            avg_fps = round(frame_idx / total_time, 1) if total_time > 0 else 0.0
+
+            if progress_callback:
+                progress_callback(100.0, frame_idx, total_frames, avg_fps, "Completed")
+
+            return {
+                "status": "success",
+                "output_path": str(out_p),
+                "elapsed_sec": total_time,
+                "fps": avg_fps,
+                "total_frames": frame_idx,
+            }
+
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        finally:
+            cap.release()
+            self._current_ffmpeg_proc = None
