@@ -26,6 +26,9 @@ Online utilities like `geminiwatermarkremover.io` rely on in-browser HTML5 `<can
 
 ## 🚀 Key Features
 
+* **Dual Media Support (Videos & Static Images)**:
+  * Seamlessly batch processes both **Videos** (`.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`, `.m4v`, `.flv`) and **Static Images** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`) in the exact same queue.
+  * Instant reverse-alpha restoration for Gemini-generated images (< 50ms per image) with auto size detection (48×48 / 96×96).
 * **Dual-Engine Architecture**:
   * **Native C++ GPU Engine (Ultra-Fast 40–120+ FPS, Recommended)**: Driven by Allen Kuo's native reverse-alpha engine with Vulkan GPU acceleration (NVIDIA/Intel/AMD), multi-frame probe alignment, adaptive alpha scaling, and Vulkan AI edge denoiser.
   * **Python Frame Extraction Pipeline**: Directly extracts each frame, applies calibrated reverse-alpha blending with temporal continuity, and streams frames into H.264 MP4 with lossless audio passthrough via FFmpeg.

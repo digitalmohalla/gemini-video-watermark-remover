@@ -294,3 +294,50 @@ class PythonFrameEngine:
         finally:
             cap.release()
             self._current_ffmpeg_proc = None
+
+    def process_image(
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback: Optional[Callable[[float, int, int, float, str], None]] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Process a single image via calibrated reverse-alpha blending."""
+        in_p = Path(input_path).resolve()
+        out_p = Path(output_path).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+
+        img = cv2.imread(str(in_p))
+        if img is None:
+            return {"status": "error", "message": "Failed to read image"}
+
+        h, w = img.shape[:2]
+        size = 96 if (w > 1024 and h > 1024) else 48
+        margin = 64 if (w > 1024 and h > 1024) else 32
+        alpha = self.alpha_96 if (size == 96 and self.alpha_96 is not None) else self.alpha_48
+
+        if alpha is None:
+            y, x = np.ogrid[:size, :size]
+            c = size // 2
+            dist = np.sqrt((x - c)**2 + (y - c)**2)
+            alpha = np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5
+
+        x = max(0, w - size - margin)
+        y = max(0, h - size - margin)
+
+        roi = img[y:y + size, x:x + size]
+        if roi.shape[0] == size and roi.shape[1] == size:
+            cleaned = self._reverse_alpha_blend(roi, alpha)
+            img[y:y + size, x:x + size] = cleaned
+
+        cv2.imwrite(str(out_p), img)
+        if progress_callback:
+            progress_callback(100.0, 1, 1, 0.0, "Image completed")
+
+        return {
+            "status": "success",
+            "output_path": str(out_p),
+            "elapsed_sec": 0.04,
+            "fps": 0.0,
+            "total_frames": 1,
+        }

@@ -94,19 +94,53 @@ def get_system_info() -> Dict[str, Any]:
     return info
 
 
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".flv"}
+SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
+
+
+def is_image(file_path: str) -> bool:
+    """Return True if the file is an image."""
+    return Path(file_path).suffix.lower() in IMAGE_EXTENSIONS
+
+
 def get_video_info(video_path: str) -> Optional[Dict[str, Any]]:
-    """Extract metadata for a given video file."""
+    """Extract metadata for a given video or image file."""
     p = Path(video_path)
     if not p.is_file():
         return None
 
     file_size_mb = round(p.stat().st_size / (1024 * 1024), 2)
 
+    # Handle image files
+    if is_image(str(p)):
+        img = cv2.imread(str(p))
+        if img is not None:
+            height, width = img.shape[:2]
+        else:
+            height, width = 0, 0
+
+        return {
+            "path": str(p),
+            "filename": p.name,
+            "media_type": "image",
+            "size_mb": file_size_mb,
+            "width": width,
+            "height": height,
+            "resolution": f"{width}x{height}",
+            "fps": 0,
+            "total_frames": 1,
+            "duration": "Image",
+            "duration_sec": 0,
+        }
+
+    # Handle video files
     cap = cv2.VideoCapture(str(p))
     if not cap.isOpened():
         return {
             "path": str(p),
             "filename": p.name,
+            "media_type": "video",
             "size_mb": file_size_mb,
             "width": 0,
             "height": 0,
@@ -130,6 +164,7 @@ def get_video_info(video_path: str) -> Optional[Dict[str, Any]]:
     return {
         "path": str(p),
         "filename": p.name,
+        "media_type": "video",
         "size_mb": file_size_mb,
         "width": width,
         "height": height,
@@ -142,24 +177,26 @@ def get_video_info(video_path: str) -> Optional[Dict[str, Any]]:
 
 
 def extract_thumbnail_base64(video_path: str, max_size: int = 160) -> Optional[str]:
-    """Extract a thumbnail from the video and return as base64 JPEG string."""
+    """Extract a thumbnail from the video or image and return as base64 JPEG string."""
     try:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
+        if is_image(video_path):
+            frame = cv2.imread(video_path)
+        else:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return None
+
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            target_frame = max(1, min(int(total_frames * 0.15), total_frames - 1))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+            ret, frame = cap.read()
+            cap.release()
+            if not ret or frame is None:
+                return None
+
+        if frame is None:
             return None
 
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        # Seek to frame ~15% into video to avoid dark opening frames
-        target_frame = max(1, min(int(total_frames * 0.15), total_frames - 1))
-        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-
-        ret, frame = cap.read()
-        cap.release()
-
-        if not ret or frame is None:
-            return None
-
-        # Resize keeping aspect ratio
         h, w = frame.shape[:2]
         if w > h:
             new_w = max_size
@@ -188,11 +225,13 @@ root = tk.Tk()
 root.withdraw()
 root.attributes('-topmost', True)
 filetypes = [
+    ("All Media (Videos & Images)", "*.mp4 *.mov *.webm *.mkv *.avi *.m4v *.png *.jpg *.jpeg *.webp *.bmp"),
     ("Video Files", "*.mp4 *.mov *.webm *.mkv *.avi *.m4v *.flv"),
+    ("Image Files", "*.png *.jpg *.jpeg *.webp *.bmp"),
     ("All Files", "*.*")
 ]
 files = filedialog.askopenfilenames(
-    title="Select Videos to Remove Watermark (Multiple Supported)",
+    title="Select Videos or Images to Remove Watermark (Multiple Supported)",
     filetypes=filetypes
 )
 print(json.dumps(list(files)))

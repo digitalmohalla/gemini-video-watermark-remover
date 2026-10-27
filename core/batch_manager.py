@@ -324,7 +324,27 @@ class BatchManager:
         engine_type = self.settings.get("engine", "native")
         res = {"status": "error", "message": "Unknown engine"}
 
-        if engine_type == "native" and self.native_engine:
+        from .utils import is_image
+        if is_image(item.input_path):
+            # Process as Static Image (Gemini Diamond Reverse-Alpha)
+            if engine_type == "native" and self.native_engine:
+                self._active_engine = self.native_engine
+                res = self.native_engine.process_image(
+                    input_path=item.input_path,
+                    output_path=str(out_path),
+                    force_mode=self.settings.get("force_mode", False),
+                    progress_callback=on_progress,
+                    log_callback=on_log,
+                )
+            else:
+                self._active_engine = self.python_engine
+                res = self.python_engine.process_image(
+                    input_path=item.input_path,
+                    output_path=str(out_path),
+                    progress_callback=on_progress,
+                    log_callback=on_log,
+                )
+        elif engine_type == "native" and self.native_engine:
             self._active_engine = self.native_engine
             res = self.native_engine.process_video(
                 input_path=item.input_path,

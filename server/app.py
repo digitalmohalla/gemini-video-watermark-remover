@@ -70,12 +70,12 @@ def create_app(batch_manager: BatchManager) -> Flask:
             return jsonify({"status": "cancelled", "folder": None})
 
         if mode == "input":
-            # Scan folder for video extensions
-            video_exts = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".flv"}
+            # Scan folder for video and image extensions
+            from core.utils import SUPPORTED_EXTENSIONS
             found_files = []
             p = Path(folder)
             for f in p.rglob("*"):
-                if f.is_file() and f.suffix.lower() in video_exts:
+                if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS:
                     found_files.append(str(f))
 
             added = app.batch_manager.add_files(found_files)

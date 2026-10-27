@@ -362,9 +362,10 @@ function renderQueue() {
           </div>
           <div class="card-meta">
             <span>📐 ${item.resolution}</span>
-            <span>⏱ ${item.duration}</span>
+            ${item.duration === 'Image' || item.total_frames === 1 
+              ? `<span>🖼 Image</span>` 
+              : `<span>⏱ ${item.duration}</span><span>🎞 ${item.total_frames} frames</span>`}
             <span>💾 ${item.size_mb} MB</span>
-            <span>🎞 ${item.total_frames} frames</span>
           </div>
           <div class="card-progress-bar">
             <div class="card-progress-fill" id="pfill-${item.id}" style="width: ${item.progress_pct}%;"></div>

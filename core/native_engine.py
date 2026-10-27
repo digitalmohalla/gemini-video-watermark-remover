@@ -241,3 +241,42 @@ class NativeEngine:
 
         # Return the descriptive error
         return res
+
+    def process_image(
+        self,
+        input_path: str,
+        output_path: str,
+        force_mode: bool = False,
+        progress_callback: Optional[Callable[[float, int, int, float, str], None]] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Process a single image using the native C++ reverse alpha engine.
+        Applies automatic detection and falls back to force unblending if skipped.
+        """
+        self._cancelled = False
+        in_p = Path(input_path).resolve()
+        out_p = Path(output_path).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+
+        if not in_p.exists():
+            return {"status": "error", "message": f"Input file not found: {in_p}"}
+
+        start_time = time.time()
+        # Attempt 1: Standard detection
+        cmd = [str(self.exe_path), "-i", str(in_p), "-o", str(out_p)]
+        if force_mode:
+            cmd.append("-f")
+
+        res = self._execute_cli(cmd, start_time, out_p, progress_callback, log_callback)
+        if res["status"] == "success":
+            return res
+
+        # Attempt 2: Force mode fallback if detection skipped
+        if not force_mode and not self._cancelled:
+            if log_callback:
+                log_callback("[Image] Auto-detection skipped; applying force reverse-alpha...")
+            cmd_force = [str(self.exe_path), "-i", str(in_p), "-o", str(out_p), "-f"]
+            res = self._execute_cli(cmd_force, start_time, out_p, progress_callback, log_callback)
+
+        return res
