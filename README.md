@@ -1,6 +1,8 @@
 # Gemini & Veo Video Watermark Remover 🎬✨
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Creator: Ramesh Kumar](https://img.shields.io/badge/Creator-Ramesh%20Kumar-6366f1?logo=github)](https://github.com/digitalmohalla)
+[![Website: digitalmohalla.com](https://img.shields.io/badge/Website-digitalmohalla.com-06b6d4)](https://digitalmohalla.com/)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)](https://microsoft.com)
 [![Acceleration: Vulkan GPU](https://img.shields.io/badge/Acceleration-Vulkan%20GPU-red?logo=vulkan&logoColor=white)](https://www.vulkan.org/)
@@ -125,6 +127,15 @@ gemini-video-watermark-remover/
 ├── LICENSE                             # MIT License
 └── README.md                           # Documentation
 ```
+
+---
+
+## 👨‍💻 Creator & Author
+
+Developed and maintained by **Ramesh Kumar**:
+* 🌐 **Website**: [digitalmohalla.com](https://digitalmohalla.com/)
+* 🐙 **GitHub**: [@digitalmohalla](https://github.com/digitalmohalla)
+* 💡 Built for community, researchers, and creators looking for lossless, offline AI video watermark restoration.
 
 ---
 
