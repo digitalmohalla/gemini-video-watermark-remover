@@ -117,7 +117,7 @@ class BatchManager:
 
         # Settings
         self.settings = {
-            "engine": "native",              # "native" or "python"
+            "engine": "python",              # "python" (Lossless reverse-alpha, recommended) or "native"
             "mark_type": "auto",             # "auto", "diamond", "veo"
             "denoise_mode": "off",           # "off" (pure reverse-alpha, lossless), "soft", "ai", "ns", "telea"
             "destination_type": "same_folder",  # "same_folder", "downloads", "custom"
@@ -372,6 +372,7 @@ class BatchManager:
                     res = self.python_engine.process_image(
                         input_path=item.input_path,
                         output_path=str(out_path),
+                        region=region_override,
                         progress_callback=on_progress,
                         log_callback=on_log,
                     )
@@ -380,6 +381,7 @@ class BatchManager:
                 res = self.python_engine.process_image(
                     input_path=item.input_path,
                     output_path=str(out_path),
+                    region=region_override,
                     progress_callback=on_progress,
                     log_callback=on_log,
                 )
@@ -417,6 +419,7 @@ class BatchManager:
                 res = self.python_engine.process_video(
                     input_path=item.input_path,
                     output_path=str(out_path),
+                    region=video_region,
                     progress_callback=on_progress,
                     log_callback=on_log,
                 )
@@ -426,6 +429,7 @@ class BatchManager:
             res = self.python_engine.process_video(
                 input_path=item.input_path,
                 output_path=str(out_path),
+                region=video_region if 'video_region' in locals() and video_region else region_override,
                 progress_callback=on_progress,
                 log_callback=on_log,
             )

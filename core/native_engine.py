@@ -197,10 +197,12 @@ class NativeEngine:
             c = [str(self.exe_path), "-i", str(in_p), "-o", str(out_p), "--veo"]
             if mark_type in ("auto", "diamond", "veo"):
                 c.extend(["--mark", mark_type])
-            if denoise_mode in ("ai", "off", "soft", "ns", "telea"):
+            if denoise_mode == "off":
+                c.extend(["--denoise", "off", "--strength", "0"])
+            elif denoise_mode in ("ai", "soft", "ns", "telea"):
                 c.extend(["--denoise", denoise_mode])
             else:
-                c.extend(["--denoise", "off"])
+                c.extend(["--denoise", "off", "--strength", "0"])
             effective_region = cur_region or region
             if force_mode or effective_region:
                 c.append("-f")
@@ -213,6 +215,8 @@ class NativeEngine:
                 c.extend(["-t", str(cur_threshold)])
             if veo_alpha is not None and veo_alpha > 0:
                 c.extend(["--veo-alpha", str(veo_alpha)])
+            else:
+                c.extend(["--veo-alpha", "0.61"])
             if force_cpu:
                 c.append("--cpu")
             if cur_variant:
