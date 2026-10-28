@@ -159,7 +159,7 @@ class PythonFrameEngine:
         self, roi: np.ndarray, alpha_map: np.ndarray
     ) -> np.ndarray:
         """
-        Apply exact inverse alpha blending formula:
+        Apply exact inverse alpha blending formula with seamless boundary feathering:
         Original = clip(round((Watermarked - Alpha * 255) / (1 - Alpha)), 0, 255)
         Zero AI inpainting, zero blur, 100% original background texture recovery.
         """
@@ -172,12 +172,11 @@ class PythonFrameEngine:
         # Prevent division by zero
         clamped_alpha = np.minimum(alpha_3d, 0.96)
         one_minus = 1.0 - clamped_alpha
-
         restored = (roi_f - clamped_alpha * 255.0) / one_minus
 
-        # Apply where alpha is significant
-        mask = clamped_alpha >= 0.005
-        out = np.where(mask, restored, roi_f)
+        # Continuous edge feathering weight [0.005 .. 0.025] to eliminate any subtle boundary seam
+        weight = np.clip((clamped_alpha - 0.005) / 0.020, 0.0, 1.0)
+        out = weight * restored + (1.0 - weight) * roi_f
 
         return np.clip(np.round(out), 0, 255).astype(np.uint8)
 
@@ -224,7 +223,9 @@ class PythonFrameEngine:
         clamped_alpha = np.minimum(alpha_3d, 0.96)
         one_minus_alpha = 1.0 - clamped_alpha
         alpha_255 = clamped_alpha * 255.0
-        mask = clamped_alpha >= 0.005
+        # Continuous linear feathering weight over boundary alpha [0.005 .. 0.025]
+        # Completely eliminates any boundary seam or outline jump
+        weight = np.clip((clamped_alpha - 0.005) / 0.020, 0.0, 1.0)
 
         # Reset capture position to beginning
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -248,8 +249,8 @@ class PythonFrameEngine:
             "-i", str(in_p),               # Secondary input for original audio
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
-            "-preset", "fast",
-            "-crf", "18",                  # Visually near-lossless
+            "-preset", "medium",
+            "-crf", "16",                  # Pristine studio visual fidelity
             "-map", "0:v:0",               # Map video from stdin
             "-map", "1:a:0?",              # Map audio if present
             "-c:a", "copy",                # Copy audio without re-encoding
@@ -281,11 +282,11 @@ class PythonFrameEngine:
                 if not ret or frame is None:
                     break
 
-                # Extract and clean ROI via vectorised reverse alpha
+                # Extract and clean ROI via vectorised reverse alpha with seamless boundary feathering
                 roi = frame[wy:wy + wh, wx:wx + ww].astype(np.float32)
                 if roi.shape[0] == wh and roi.shape[1] == ww:
                     restored = (roi - alpha_255) / one_minus_alpha
-                    cleaned = np.where(mask, restored, roi)
+                    cleaned = weight * restored + (1.0 - weight) * roi
                     frame[wy:wy + wh, wx:wx + ww] = np.clip(np.round(cleaned), 0, 255).astype(np.uint8)
 
                 # Write processed raw frame bytes to FFmpeg stdin
