@@ -136,16 +136,17 @@
           </select>
         </div>
 
-        <!-- AI Denoising -->
+        <!-- Denoise & Edge Filter -->
         <div class="form-group">
-          <label>Compression Noise Cleanup</label>
+          <label>Edge & Denoise Filter</label>
           <select class="form-control" id="denoise-select">
-            <option value="ai">AI Denoise (NCNN Vulkan GPU - Cleans Edge Noise)</option>
-            <option value="off">Off (Pure Reverse Alpha Blending)</option>
-            <option value="soft">Soft Feather Filter</option>
+            <option value="off" selected>Off - Pure Reverse Alpha (Recommended: Lossless, Zero Blur)</option>
+            <option value="soft">Soft Feather (Gentle Edge Blend for Compressed Clips)</option>
+            <option value="ai">AI Inpaint Denoise (Only for low-bitrate / damaged rips)</option>
             <option value="ns">Navier-Stokes Edge Blend</option>
             <option value="telea">Telea Inpaint Blend</option>
           </select>
+          <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;">"Off" preserves 100% of the original texture, fabric, and sharpness without blurry marks.</small>
         </div>
 
         <!-- File Options -->

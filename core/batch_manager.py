@@ -102,7 +102,7 @@ class BatchManager:
         self.settings = {
             "engine": "native",              # "native" or "python"
             "mark_type": "auto",             # "auto", "diamond", "veo"
-            "denoise_mode": "ai",            # "ai", "off", "soft", "ns", "telea"
+            "denoise_mode": "off",           # "off" (pure reverse-alpha, lossless), "soft", "ai", "ns", "telea"
             "destination_type": "same_folder",  # "same_folder", "downloads", "custom"
             "custom_destination": "",
             "subfolder_name": "cleaned_videos",
@@ -333,10 +333,22 @@ class BatchManager:
                 res = self.native_engine.process_image(
                     input_path=item.input_path,
                     output_path=str(out_path),
+                    denoise_mode=self.settings.get("denoise_mode", "off"),
                     force_mode=self.settings.get("force_mode", False),
                     progress_callback=on_progress,
                     log_callback=on_log,
                 )
+                # Auto-fallback to Python engine for images if native skipped/failed
+                if res.get("status") != "success" and not self._stop_requested and self.settings.get("auto_retry", True):
+                    on_log(f"[Fallback] Native skipped ({res.get('message')}). Launching Python Reverse-Alpha Engine...")
+                    on_progress(50.0, 0, 1, 0.0, "Auto-Fallback: Using Python Engine...")
+                    self._active_engine = self.python_engine
+                    res = self.python_engine.process_image(
+                        input_path=item.input_path,
+                        output_path=str(out_path),
+                        progress_callback=on_progress,
+                        log_callback=on_log,
+                    )
             else:
                 self._active_engine = self.python_engine
                 res = self.python_engine.process_image(
@@ -351,7 +363,7 @@ class BatchManager:
                 input_path=item.input_path,
                 output_path=str(out_path),
                 mark_type=self.settings.get("mark_type", "auto"),
-                denoise_mode=self.settings.get("denoise_mode", "ai"),
+                denoise_mode=self.settings.get("denoise_mode", "off"),
                 force_mode=self.settings.get("force_mode", False),
                 force_cpu=self.settings.get("force_cpu", False),
                 veo_alpha=self.settings.get("veo_alpha", 0.0) or None,

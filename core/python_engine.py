@@ -14,7 +14,7 @@ from typing import Optional, Callable, Dict, Any, Tuple
 import cv2
 import numpy as np
 
-from .utils import get_ffmpeg_path, get_base_dir
+from .utils import get_ffmpeg_path, get_base_dir, detect_content_bbox
 
 
 class PythonFrameEngine:
@@ -57,46 +57,50 @@ class PythonFrameEngine:
     ) -> Tuple[int, int, int, int, np.ndarray]:
         """
         Probe sample frames across the video to locate the watermark
-        in the bottom-right corner and select optimal alpha map.
+        in the bottom-right corner across scales and select optimal alpha map.
+        Guarantees temporal consistency by fixing the coordinates across all frames.
         """
-        # Determine base watermark size
-        if width > 1024 and height > 1024:
-            size = 96
-            margin = 64
-            alpha = self.alpha_96
+        # Read a representative frame to detect black borders / letterboxing
+        cap.set(cv2.CAP_PROP_POS_FRAMES, min(5, total_frames - 1))
+        ret, probe_frame = cap.read()
+        if ret and probe_frame is not None:
+            bx1, by1, bx2, by2 = detect_content_bbox(probe_frame)
         else:
-            size = 48
-            margin = 32
-            alpha = self.alpha_48
+            bx1, by1, bx2, by2 = 0, 0, width, height
 
-        # Fallback synthetic alpha mask if assets missing
-        if alpha is None:
+        cw = bx2 - bx1
+        ch = by2 - by1
+
+        # Use calibrated alpha map
+        base_alpha = self.alpha_48
+        if base_alpha is None:
+            size = 48
             y, x = np.ogrid[:size, :size]
             c = size // 2
             dist = np.sqrt((x - c)**2 + (y - c)**2)
-            alpha = np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5
+            base_alpha = np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5
 
-        # Standard expected location
-        x = max(0, width - size - margin)
-        y = max(0, height - size - margin)
+        alpha_u8 = (base_alpha * 255).astype(np.uint8)
 
-        # Probe up to 6 frames across the video to refine coordinates
+        # Bottom-right 45% of active content area
+        sy = by1 + int(ch * 0.55)
+        sx = bx1 + int(cw * 0.55)
+        sw = bx2 - sx
+        sh = by2 - sy
+
         probe_indices = [
-            int(total_frames * r) for r in [0.2, 0.4, 0.5, 0.6, 0.8]
+            int(total_frames * r) for r in [0.15, 0.35, 0.50, 0.65, 0.85]
             if 0 < int(total_frames * r) < total_frames
         ]
         if not probe_indices:
             probe_indices = [0]
 
-        best_x, best_y = x, y
+        best_x = bx1 + max(0, cw - 48 - 32)
+        best_y = by1 + max(0, ch - 48 - 32)
+        best_w = 48
+        best_h = 48
         best_corr = -1.0
-
-        search_w = min(size + 60, width - 1)
-        search_h = min(size + 60, height - 1)
-        sx = width - search_w
-        sy = height - search_h
-
-        alpha_u8 = (alpha * 255).astype(np.uint8)
+        best_scale = 1.0
 
         for f_idx in probe_indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
@@ -104,19 +108,28 @@ class PythonFrameEngine:
             if not ret or frame is None:
                 continue
 
-            search_region = frame[sy:sy + search_h, sx:sx + search_w]
+            search_region = frame[sy:sy + sh, sx:sx + sw]
             gray_sr = cv2.cvtColor(search_region, cv2.COLOR_BGR2GRAY)
 
-            # Normalized Cross Correlation template match
-            res = cv2.matchTemplate(gray_sr, alpha_u8, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+            for scale in [0.35, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]:
+                tw = int(48 * scale)
+                th = int(48 * scale)
+                if tw >= sw or th >= sh or tw < 12:
+                    continue
+                resized_u8 = cv2.resize(alpha_u8, (tw, th))
+                res = cv2.matchTemplate(gray_sr, resized_u8, cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
 
-            if max_val > best_corr and max_val > 0.35:
-                best_corr = max_val
-                best_x = sx + max_loc[0]
-                best_y = sy + max_loc[1]
+                if max_val > best_corr and max_val > 0.22:
+                    best_corr = max_val
+                    best_scale = scale
+                    best_w = tw
+                    best_h = th
+                    best_x = sx + max_loc[0]
+                    best_y = sy + max_loc[1]
 
-        return best_x, best_y, size, size, alpha
+        final_alpha = cv2.resize(base_alpha, (best_w, best_h))
+        return best_x, best_y, best_w, best_h, final_alpha
 
     def _reverse_alpha_blend(
         self, roi: np.ndarray, alpha_map: np.ndarray, logo_val: float = 255.0
@@ -302,37 +315,86 @@ class PythonFrameEngine:
         progress_callback: Optional[Callable[[float, int, int, float, str], None]] = None,
         log_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
-        """Process a single image via calibrated reverse-alpha blending."""
+        """Process a single image via calibrated multi-scale reverse-alpha blending."""
         in_p = Path(input_path).resolve()
         out_p = Path(output_path).resolve()
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         img = cv2.imread(str(in_p))
         if img is None:
-            return {"status": "error", "message": "Failed to read image"}
+            return {"status": "error", "message": "Failed to read image with OpenCV"}
 
         h, w = img.shape[:2]
-        size = 96 if (w > 1024 and h > 1024) else 48
-        margin = 64 if (w > 1024 and h > 1024) else 32
-        alpha = self.alpha_96 if (size == 96 and self.alpha_96 is not None) else self.alpha_48
+        x1, y1, x2, y2 = detect_content_bbox(img)
+        content = img[y1:y2, x1:x2]
+        ch, cw = content.shape[:2]
 
-        if alpha is None:
+        base_alpha = self.alpha_48
+        if base_alpha is None:
+            size = 48
             y, x = np.ogrid[:size, :size]
             c = size // 2
             dist = np.sqrt((x - c)**2 + (y - c)**2)
-            alpha = np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5
+            base_alpha = np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5
 
-        x = max(0, w - size - margin)
-        y = max(0, h - size - margin)
+        alpha_u8 = (base_alpha * 255).astype(np.uint8)
 
-        roi = img[y:y + size, x:x + size]
-        if roi.shape[0] == size and roi.shape[1] == size:
-            cleaned = self._reverse_alpha_blend(roi, alpha)
-            img[y:y + size, x:x + size] = cleaned
+        # Search bottom right 45% of active content area
+        sy = int(ch * 0.55)
+        sx = int(cw * 0.55)
+        sw = cw - sx
+        sh = ch - sy
+
+        search_area = content[sy:ch, sx:cw]
+        gray_sa = cv2.cvtColor(search_area, cv2.COLOR_BGR2GRAY)
+
+        best_corr = -1.0
+        best_loc = None
+        best_scale = 1.0
+
+        for scale in np.linspace(0.25, 2.0, 45):
+            tw = int(48 * scale)
+            th = int(48 * scale)
+            if tw >= sw or th >= sh or tw < 12:
+                continue
+            resized = cv2.resize(alpha_u8, (tw, th))
+            res = cv2.matchTemplate(gray_sa, resized, cv2.TM_CCOEFF_NORMED)
+            min_v, max_v, min_l, max_l = cv2.minMaxLoc(res)
+            if max_v > best_corr:
+                best_corr = max_v
+                best_loc = max_l
+                best_scale = scale
+
+        if best_corr >= 0.18 and best_loc is not None:
+            tw = int(48 * best_scale)
+            th = int(48 * best_scale)
+            wx = sx + best_loc[0]
+            wy = sy + best_loc[1]
+
+            cur_alpha = cv2.resize(base_alpha, (tw, th))
+            roi = content[wy:wy + th, wx:wx + tw]
+            cleaned = self._reverse_alpha_blend(roi, cur_alpha)
+            content[wy:wy + th, wx:wx + tw] = cleaned
+            img[y1:y2, x1:x2] = content
+            if log_callback:
+                log_callback(f"[Python Engine] Watermark located at ({wx},{wy}) {tw}x{th} (NCC {best_corr:.2f}) and removed cleanly.")
+        else:
+            # Fallback to standard bottom right corner
+            size = 48
+            tw = 48
+            th = 48
+            wx = max(0, cw - 48 - 32)
+            wy = max(0, ch - 48 - 32)
+            cur_alpha = cv2.resize(base_alpha, (tw, th))
+            roi = content[wy:wy + th, wx:wx + tw]
+            if roi.shape[0] == th and roi.shape[1] == tw:
+                cleaned = self._reverse_alpha_blend(roi, cur_alpha)
+                content[wy:wy + th, wx:wx + tw] = cleaned
+                img[y1:y2, x1:x2] = content
 
         cv2.imwrite(str(out_p), img)
         if progress_callback:
-            progress_callback(100.0, 1, 1, 0.0, "Image completed")
+            progress_callback(100.0, 1, 1, 0.0, "Image completed (Lossless Reverse Alpha)")
 
         return {
             "status": "success",

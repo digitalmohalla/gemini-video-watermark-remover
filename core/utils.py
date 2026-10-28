@@ -104,6 +104,36 @@ def is_image(file_path: str) -> bool:
     return Path(file_path).suffix.lower() in IMAGE_EXTENSIONS
 
 
+def detect_content_bbox(img: np.ndarray, threshold: int = 12) -> Tuple[int, int, int, int]:
+    """
+    Detect non-black active content bounding box (x1, y1, x2, y2).
+    Returns (0, 0, width, height) if no black bars/letterboxing are present.
+    """
+    if img is None or img.size == 0:
+        return 0, 0, 0, 0
+
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+
+    row_max = np.max(gray, axis=1)
+    col_max = np.max(gray, axis=0)
+
+    non_black_rows = np.where(row_max > threshold)[0]
+    non_black_cols = np.where(col_max > threshold)[0]
+
+    if len(non_black_rows) == 0 or len(non_black_cols) == 0:
+        return 0, 0, w, h
+
+    y1, y2 = int(non_black_rows[0]), int(non_black_rows[-1] + 1)
+    x1, x2 = int(non_black_cols[0]), int(non_black_cols[-1] + 1)
+
+    # Only treat as black bars if padding is meaningful (>= 4 pixels)
+    if y1 < 4 and (h - y2) < 4 and x1 < 4 and (w - x2) < 4:
+        return 0, 0, w, h
+
+    return x1, y1, x2, y2
+
+
 def get_video_info(video_path: str) -> Optional[Dict[str, Any]]:
     """Extract metadata for a given video or image file."""
     p = Path(video_path)

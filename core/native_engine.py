@@ -14,7 +14,10 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, List
 
-from .utils import get_native_exe_path
+import cv2
+import numpy as np
+
+from .utils import get_native_exe_path, detect_content_bbox
 
 
 class NativeEngine:
@@ -151,7 +154,7 @@ class NativeEngine:
         input_path: str,
         output_path: str,
         mark_type: str = "auto",       # "auto", "diamond", "veo"
-        denoise_mode: str = "ai",      # "ai", "off", "soft", "ns", "telea"
+        denoise_mode: str = "off",     # "off" (recommended pure reverse-alpha), "ai", "soft", "ns", "telea"
         force_mode: bool = False,
         region: Optional[str] = None,  # e.g. "1179,642,20,20" or "br:mx,my,w,h"
         threshold: float = 0.25,
@@ -183,10 +186,17 @@ class NativeEngine:
                 c.extend(["--mark", mark_type])
             if denoise_mode in ("ai", "off", "soft", "ns", "telea"):
                 c.extend(["--denoise", denoise_mode])
+            else:
+                c.extend(["--denoise", "off"])
             if force_mode:
                 c.append("-f")
             if region and region.strip():
                 c.extend(["--region", region.strip()])
+            else:
+                # Enable intelligent snap search for letterbox/pillarbox/custom aspect ratios
+                c.extend(["--fallback-region", "br:auto", "--snap", "--snap-threshold", "0.20"])
+            # Enable AlphaJudge ML seed consensus to eliminate per-frame alpha flickering
+            c.append("--ml")
             if cur_threshold != 0.25:
                 c.extend(["-t", str(cur_threshold)])
             if veo_alpha is not None and veo_alpha > 0:
@@ -246,13 +256,14 @@ class NativeEngine:
         self,
         input_path: str,
         output_path: str,
+        denoise_mode: str = "off",
         force_mode: bool = False,
         progress_callback: Optional[Callable[[float, int, int, float, str], None]] = None,
         log_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """
         Process a single image using the native C++ reverse alpha engine.
-        Applies automatic detection and falls back to force unblending if skipped.
+        Automatically handles black padding/borders and uses snap detection for sub-pixel accuracy.
         """
         self._cancelled = False
         in_p = Path(input_path).resolve()
@@ -263,20 +274,75 @@ class NativeEngine:
             return {"status": "error", "message": f"Input file not found: {in_p}"}
 
         start_time = time.time()
-        # Attempt 1: Standard detection
-        cmd = [str(self.exe_path), "-i", str(in_p), "-o", str(out_p)]
-        if force_mode:
-            cmd.append("-f")
+        im = cv2.imread(str(in_p))
+        if im is None:
+            return {"status": "error", "message": "Failed to read image with OpenCV"}
 
-        res = self._execute_cli(cmd, start_time, out_p, progress_callback, log_callback)
-        if res["status"] == "success":
+        h, w = im.shape[:2]
+        x1, y1, x2, y2 = detect_content_bbox(im)
+        has_bars = (x1 > 0 or y1 > 0 or x2 < w or y2 < h)
+
+        temp_crop_in: Optional[Path] = None
+        temp_crop_out: Optional[Path] = None
+        target_in = in_p
+        target_out = out_p
+
+        try:
+            if has_bars:
+                content = im[y1:y2, x1:x2]
+                temp_crop_in = in_p.parent / f"_tmp_in_{in_p.stem}.png"
+                temp_crop_out = in_p.parent / f"_tmp_out_{in_p.stem}.png"
+                cv2.imwrite(str(temp_crop_in), content)
+                target_in = temp_crop_in
+                target_out = temp_crop_out
+
+            # Build base command with snap search
+            cmd = [
+                str(self.exe_path),
+                "-i", str(target_in),
+                "-o", str(target_out),
+                "--fallback-region", "br:auto",
+                "--snap",
+                "--snap-threshold", "0.20",
+                "--denoise", denoise_mode if denoise_mode in ("ai", "off", "soft", "ns", "telea") else "off",
+            ]
+            if force_mode:
+                cmd.append("-f")
+
+            res = self._execute_cli(cmd, start_time, target_out, progress_callback, log_callback)
+
+            # If skipped or failed, retry with force mode
+            if res.get("status") != "success" and not force_mode and not self._cancelled:
+                if log_callback:
+                    log_callback("[Image] Retrying with forced reverse-alpha unblending...")
+                cmd_retry = [
+                    str(self.exe_path),
+                    "-i", str(target_in),
+                    "-o", str(target_out),
+                    "-f",
+                    "--fallback-region", "br:auto",
+                    "--denoise", denoise_mode if denoise_mode in ("ai", "off", "soft", "ns", "telea") else "off",
+                ]
+                res = self._execute_cli(cmd_retry, start_time, target_out, progress_callback, log_callback)
+
+            if res.get("status") == "success" and has_bars:
+                processed_content = cv2.imread(str(target_out))
+                if processed_content is not None:
+                    im[y1:y2, x1:x2] = processed_content
+                    cv2.imwrite(str(out_p), im)
+                    res["output_path"] = str(out_p)
+
             return res
 
-        # Attempt 2: Force mode fallback if detection skipped
-        if not force_mode and not self._cancelled:
-            if log_callback:
-                log_callback("[Image] Auto-detection skipped; applying force reverse-alpha...")
-            cmd_force = [str(self.exe_path), "-i", str(in_p), "-o", str(out_p), "-f"]
-            res = self._execute_cli(cmd_force, start_time, out_p, progress_callback, log_callback)
-
-        return res
+        finally:
+            # Clean up temporary files
+            if temp_crop_in and temp_crop_in.exists():
+                try:
+                    temp_crop_in.unlink()
+                except Exception:
+                    pass
+            if temp_crop_out and temp_crop_out.exists():
+                try:
+                    temp_crop_out.unlink()
+                except Exception:
+                    pass
