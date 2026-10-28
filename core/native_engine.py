@@ -132,10 +132,23 @@ class NativeEngine:
 
         # Extract meaningful skip or error reason
         error_msg = f"Native engine exited with code {return_code}"
+        has_heavy_skip = False
+        skip_regex = re.compile(r'(\d+)/(\d+)\s+frames\s+\((\d+)\s+skip\)')
         for line in reversed(output_lines):
+            m_s = skip_regex.search(line)
+            if m_s:
+                total_f_count = int(m_s.group(2))
+                skip_count = int(m_s.group(3))
+                if skip_count > max(2, int(total_f_count * 0.10)):
+                    has_heavy_skip = True
+                    error_msg = f"Watermark unblending skipped {skip_count}/{total_f_count} frames"
+                break
             if "[SKIP]" in line or "no Gemini" in line or "error" in line.lower():
                 error_msg = line
                 break
+
+        if has_heavy_skip:
+            success = False
 
         return {
             "status": "success" if success else "error",
@@ -180,7 +193,7 @@ class NativeEngine:
             return {"status": "error", "message": f"Input file not found: {in_p}"}
 
         # Attempt 1: Standard configured run
-        def build_cmd(cur_variant=None, cur_threshold=threshold, cur_legacy=False):
+        def build_cmd(cur_variant=None, cur_threshold=threshold, cur_legacy=False, cur_region=None):
             c = [str(self.exe_path), "-i", str(in_p), "-o", str(out_p), "--veo"]
             if mark_type in ("auto", "diamond", "veo"):
                 c.extend(["--mark", mark_type])
@@ -188,15 +201,14 @@ class NativeEngine:
                 c.extend(["--denoise", denoise_mode])
             else:
                 c.extend(["--denoise", "off"])
-            if force_mode:
+            effective_region = cur_region or region
+            if force_mode or effective_region:
                 c.append("-f")
-            if region and region.strip():
-                c.extend(["--region", region.strip()])
+            if effective_region and effective_region.strip():
+                c.extend(["--region", effective_region.strip()])
             else:
                 # Enable intelligent snap search for letterbox/pillarbox/custom aspect ratios
                 c.extend(["--fallback-region", "br:auto", "--snap", "--snap-threshold", "0.20"])
-            # Enable AlphaJudge ML seed consensus to eliminate per-frame alpha flickering
-            c.append("--ml")
             if cur_threshold != 0.25:
                 c.extend(["-t", str(cur_threshold)])
             if veo_alpha is not None and veo_alpha > 0:
@@ -217,22 +229,27 @@ class NativeEngine:
             return res
 
         # -------------------------------------------------------------
-        # Auto-Retry Strategy: Handle "no diamond detected (code 1)"
+        # Auto-Retry Strategy: Handle "no diamond detected" or skipped frames
         # -------------------------------------------------------------
         is_720p = (video_width == 1280 and video_height == 720) or (video_width == 720 and video_height == 1280) or ("1280x720" in res.get("message", ""))
-        
+        is_1080p = (video_width == 1920 and video_height == 1080) or (video_width == 1080 and video_height == 1920) or ("1920x1080" in res.get("message", ""))
+
         fallback_strategies = []
         if is_720p:
-            # 720p low-bitrate and high-bitrate variants bypass auto NCC skip
-            fallback_strategies.append(("720p-1", 0.25, False, "Retrying with 720p-1 diamond profile..."))
-            fallback_strategies.append(("720p-2", 0.25, False, "Retrying with 720p-2 compact profile..."))
-            fallback_strategies.append((None, 0.25, True, "Retrying with legacy Veo text profile..."))
+            # 1. Standard 720p diamond coordinates: (1136, 576, 48, 48) - 100% confidence lock
+            fallback_strategies.append((None, 0.25, False, "1136,576,48,48", "Retrying with standard 720p diamond lock (1136,576)..."))
+            fallback_strategies.append(("720p-1", 0.25, False, None, "Retrying with 720p-1 diamond profile..."))
+            fallback_strategies.append(("720p-2", 0.25, False, None, "Retrying with 720p-2 compact profile..."))
+            fallback_strategies.append((None, 0.25, True, None, "Retrying with legacy Veo text profile..."))
+        elif is_1080p:
+            fallback_strategies.append((None, 0.25, False, "1728,888,96,96", "Retrying with standard 1080p diamond lock..."))
+            fallback_strategies.append((None, 0.10, False, None, "Retrying with relaxed sensitivity threshold..."))
+            fallback_strategies.append((None, 0.25, True, None, "Retrying with legacy Veo text profile..."))
         else:
-            # General resolutions: relaxed threshold, then legacy profile
-            fallback_strategies.append((None, 0.10, False, "Retrying with relaxed sensitivity threshold..."))
-            fallback_strategies.append((None, 0.25, True, "Retrying with legacy Veo text profile..."))
+            fallback_strategies.append((None, 0.10, False, None, "Retrying with relaxed sensitivity threshold..."))
+            fallback_strategies.append((None, 0.25, True, None, "Retrying with legacy Veo text profile..."))
 
-        for fb_variant, fb_thresh, fb_legacy, fb_msg in fallback_strategies:
+        for fb_variant, fb_thresh, fb_legacy, fb_reg, fb_msg in fallback_strategies:
             if self._cancelled:
                 break
 
@@ -242,7 +259,7 @@ class NativeEngine:
                 progress_callback(5.0, 0, 0, 0.0, fb_msg)
 
             time.sleep(0.3)
-            retry_cmd = build_cmd(cur_variant=fb_variant, cur_threshold=fb_thresh, cur_legacy=fb_legacy)
+            retry_cmd = build_cmd(cur_variant=fb_variant, cur_threshold=fb_thresh, cur_legacy=fb_legacy, cur_region=fb_reg)
             retry_res = self._execute_cli(retry_cmd, time.time(), out_p, progress_callback, log_callback)
 
             if retry_res["status"] == "success":

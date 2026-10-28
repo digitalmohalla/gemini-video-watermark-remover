@@ -385,15 +385,23 @@ class BatchManager:
                 )
         elif engine_type == "native" and self.native_engine:
             self._active_engine = self.native_engine
+            # If explicit region was found dynamically by profiler or black bars exist, pass it to lock 100% confidence
+            video_region = None
+            if region_override:
+                video_region = region_override
+            elif profile and profile.watermark_found and profile.region_str:
+                video_region = profile.region_str
+            elif profile and profile.has_black_bars and profile.region_str:
+                video_region = profile.region_str
             res = self.native_engine.process_video(
                 input_path=item.input_path,
                 output_path=str(out_path),
                 mark_type=mark_override,
                 denoise_mode=self.settings.get("denoise_mode", "off"),
-                force_mode=True if region_override else self.settings.get("force_mode", False),
+                force_mode=True if video_region else self.settings.get("force_mode", False),
                 force_cpu=self.settings.get("force_cpu", False),
-                region=region_override,
-                veo_alpha=alpha_override,
+                region=video_region,
+                veo_alpha=self.settings.get("veo_alpha", 0.0) or None,
                 video_width=item.width,
                 video_height=item.height,
                 auto_retry=self.settings.get("auto_retry", True),
