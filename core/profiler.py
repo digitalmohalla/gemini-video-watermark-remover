@@ -176,61 +176,104 @@ class IntelligentWatermarkProfiler:
 
         tmpl = cv2.resize(tmpl, (target_sz, target_sz))
 
+        # Standard Gemini/Veo bottom-right canonical anchor
+        std_margin = 144 if target_sz == 96 else 96
+        canon_gx = int(x2 - std_margin - target_sz)
+        canon_gy = int(y2 - std_margin - target_sz)
+
         # Bottom-right corner search: bottom 35%, right 35% of content area
         cz_w = min(cw, max(target_sz * 3, int(cw * 0.35)))
         cz_h = min(ch, max(target_sz * 3, int(ch * 0.35)))
         sx = x2 - cz_w
         sy = y2 - cz_h
 
-        # Scan frames and accumulate multi-frame correlation votes
-        candidate_votes: Dict[Tuple[int, int], float] = {}
+        # Multi-frame tracking: evaluate canonical window and wide search zone
+        canon_scores: List[float] = []
+        non_canon_candidates: Dict[Tuple[int, int], List[float]] = {}
         alpha_estimates: List[float] = []
         best_single_corr = 0.0
 
         for f in frames:
             gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) if len(f.shape) == 3 else f
+
+            # 1. Evaluate Canonical Window (+/- 8px slack)
+            pad = 8
+            cy1, cy2 = max(0, canon_gy - pad), min(h, canon_gy + target_sz + pad)
+            cx1, cx2 = max(0, canon_gx - pad), min(w, canon_gx + target_sz + pad)
+            c_roi = gray[cy1:cy2, cx1:cx2]
+            if c_roi.shape[0] >= target_sz and c_roi.shape[1] >= target_sz:
+                c_res = cv2.matchTemplate(c_roi, tmpl, cv2.TM_CCOEFF_NORMED)
+                _, c_max, _, _ = cv2.minMaxLoc(c_res)
+                canon_scores.append(float(c_max))
+                if c_max > best_single_corr:
+                    best_single_corr = float(c_max)
+
+            # 2. Wide search for non-canonical candidates
             sa = gray[sy:y2, sx:x2]
+            if sa.shape[0] >= target_sz and sa.shape[1] >= target_sz:
+                res = cv2.matchTemplate(sa, tmpl, cv2.TM_CCOEFF_NORMED)
+                _, max_v, _, max_l = cv2.minMaxLoc(res)
+                if max_v > best_single_corr:
+                    best_single_corr = float(max_v)
 
-            if sa.shape[0] < target_sz or sa.shape[1] < target_sz:
-                continue
+                gx_cand = int(sx + max_l[0])
+                gy_cand = int(sy + max_l[1])
 
-            res = cv2.matchTemplate(sa, tmpl, cv2.TM_CCOEFF_NORMED)
-            _, max_v, _, max_l = cv2.minMaxLoc(res)
+                # If within 10px of canonical, it belongs to canonical anchor
+                if abs(gx_cand - canon_gx) <= 10 and abs(gy_cand - canon_gy) <= 10:
+                    pass
+                elif max_v >= 0.40:
+                    # Cluster non-canonical candidate within +/- 3 pixels
+                    matched_key = None
+                    for (kx, ky) in non_canon_candidates.keys():
+                        if abs(gx_cand - kx) <= 3 and abs(gy_cand - ky) <= 3:
+                            matched_key = (kx, ky)
+                            break
+                    if matched_key:
+                        non_canon_candidates[matched_key].append(float(max_v))
+                    else:
+                        non_canon_candidates[(gx_cand, gy_cand)] = [float(max_v)]
 
-            if max_v > best_single_corr:
-                best_single_corr = float(max_v)
-
-            if max_v > 0.20:
-                gx = int(sx + max_l[0])
-                gy = int(sy + max_l[1])
-                candidate_votes[(gx, gy)] = candidate_votes.get((gx, gy), 0.0) + float(max_v)
-
-                # Measure alpha directly from video contrast
-                roi = gray[gy:gy + target_sz, gx:gx + target_sz]
-                pad = 8
-                cy1, cy2 = max(0, gy - pad), min(h, gy + target_sz + pad)
-                cx1, cx2 = max(0, gx - pad), min(w, gx + target_sz + pad)
-                collar = gray[cy1:cy2, cx1:cx2]
+            # Measure alpha on canonical region
+            roi = gray[canon_gy:canon_gy + target_sz, canon_gx:canon_gx + target_sz]
+            if roi.shape == (target_sz, target_sz):
+                c_pad = 8
+                pcy1, pcy2 = max(0, canon_gy - c_pad), min(h, canon_gy + target_sz + c_pad)
+                pcx1, pcx2 = max(0, canon_gx - c_pad), min(w, canon_gx + target_sz + c_pad)
+                collar = gray[pcy1:pcy2, pcx1:pcx2]
                 bg_est = float(np.median(collar))
                 fg_peak = float(np.max(roi))
                 denom = max(1.0, 255.0 - bg_est)
                 measured_a = float(np.clip((fg_peak - bg_est) / denom, 0.20, 0.98))
                 alpha_estimates.append(measured_a)
 
-        final_alpha = round(float(np.median(alpha_estimates)), 2) if alpha_estimates else 0.78
+        final_alpha = round(float(np.median(alpha_estimates)), 2) if alpha_estimates else 0.61
+        canon_max_c = max(canon_scores) if canon_scores else 0.0
+        canon_avg_c = float(np.mean(canon_scores)) if canon_scores else 0.0
 
-        if candidate_votes:
-            best_pos, total_score = max(candidate_votes.items(), key=lambda it: it[1])
-            avg_conf = total_score / len(frames)
-            gx, gy = best_pos
-            watermark_found = bool(avg_conf >= 0.20 or total_score >= 0.45 or best_single_corr >= 0.35)
-        else:
-            # Standard Gemini/Veo bottom-right margin (96px for 720p, 144px for 1080p)
-            std_margin = 144 if target_sz == 96 else 96
-            gx = int(x2 - std_margin - target_sz)
-            gy = int(y2 - std_margin - target_sz)
-            avg_conf = 0.0
-            watermark_found = False
+        # Determine winner: Canonical anchor vs Non-canonical candidate
+        win_gx, win_gy = canon_gx, canon_gy
+        win_conf = max(canon_max_c, canon_avg_c)
+
+        if non_canon_candidates:
+            # Find best non-canonical candidate
+            best_nc_pos = None
+            best_nc_avg = 0.0
+            for pos, vals in non_canon_candidates.items():
+                avg_v = float(np.mean(vals))
+                if len(vals) >= (len(frames) * 0.6) and avg_v > best_nc_avg:
+                    best_nc_avg = avg_v
+                    best_nc_pos = pos
+
+            # Strict conditions to override canonical:
+            # Non-canonical candidate must be stationary in >=60% frames, avg >= 0.75,
+            # and beat canonical by at least 0.25.
+            if best_nc_pos and best_nc_avg >= 0.75 and (best_nc_avg - canon_avg_c) >= 0.25 and canon_max_c < 0.40:
+                win_gx, win_gy = best_nc_pos
+                win_conf = best_nc_avg
+
+        gx, gy = win_gx, win_gy
+        watermark_found = bool(canon_max_c >= 0.20 or win_conf >= 0.30 or (not has_bars and w >= 640 and h >= 360))
 
         mx = max(0, int(w - gx - target_sz))
         my = max(0, int(h - gy - target_sz))
@@ -256,7 +299,7 @@ class IntelligentWatermarkProfiler:
             margin_x=int(mx),
             margin_y=int(my),
             region_str=f"{gx},{gy},{target_sz},{target_sz}",
-            confidence=round(float(max(avg_conf, best_single_corr)), 2),
+            confidence=round(float(max(win_conf, best_single_corr)), 2),
             measured_alpha=float(final_alpha),
             start_frame=0,
         )

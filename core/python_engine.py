@@ -121,11 +121,15 @@ class PythonFrameEngine:
         if not probe_indices:
             probe_indices = [0]
 
-        best_x = bx1 + max(0, cw - target_size - (144 if target_size == 96 else 96))
-        best_y = by1 + max(0, ch - target_size - (144 if target_size == 96 else 96))
+        canon_x = bx1 + max(0, cw - target_size - (144 if target_size == 96 else 96))
+        canon_y = by1 + max(0, ch - target_size - (144 if target_size == 96 else 96))
+        best_x = canon_x
+        best_y = canon_y
         best_w = target_size
         best_h = target_size
-        best_corr = -1.0
+        canon_max_corr = -1.0
+
+        non_canon_candidates: Dict[Tuple[int, int], List[float]] = {}
 
         for f_idx in probe_indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
@@ -133,24 +137,53 @@ class PythonFrameEngine:
             if not ret or frame is None:
                 continue
 
-            search_region = frame[sy:sy + sh, sx:sx + sw]
-            gray_sr = cv2.cvtColor(search_region, cv2.COLOR_BGR2GRAY)
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-            for scale in [0.5, 0.75, 1.0, 1.25, 1.5]:
-                tw = int(target_size * scale)
-                th = int(target_size * scale)
-                if tw >= sw or th >= sh or tw < 12:
-                    continue
-                resized_u8 = cv2.resize(alpha_gray, (tw, th))
-                res = cv2.matchTemplate(gray_sr, resized_u8, cv2.TM_CCOEFF_NORMED)
+            # 1. Canonical anchor evaluation
+            pad = 8
+            pcy1, pcy2 = max(0, canon_y - pad), min(height, canon_y + target_size + pad)
+            pcx1, pcx2 = max(0, canon_x - pad), min(width, canon_x + target_size + pad)
+            c_roi = gray_frame[pcy1:pcy2, pcx1:pcx2]
+            if c_roi.shape[0] >= target_size and c_roi.shape[1] >= target_size:
+                c_res = cv2.matchTemplate(c_roi, alpha_gray, cv2.TM_CCOEFF_NORMED)
+                _, c_max, _, _ = cv2.minMaxLoc(c_res)
+                if c_max > canon_max_corr:
+                    canon_max_corr = float(c_max)
+
+            # 2. Wide search for candidates
+            search_region = gray_frame[sy:sy + sh, sx:sx + sw]
+            if search_region.shape[0] >= target_size and search_region.shape[1] >= target_size:
+                res = cv2.matchTemplate(search_region, alpha_gray, cv2.TM_CCOEFF_NORMED)
                 min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
 
-                if max_val > best_corr and max_val > 0.22:
-                    best_corr = max_val
-                    best_w = tw
-                    best_h = th
-                    best_x = sx + max_loc[0]
-                    best_y = sy + max_loc[1]
+                gx = sx + max_loc[0]
+                gy = sy + max_loc[1]
+
+                if abs(gx - canon_x) <= 10 and abs(gy - canon_y) <= 10:
+                    pass
+                elif max_val >= 0.45:
+                    matched_k = None
+                    for (kx, ky) in non_canon_candidates.keys():
+                        if abs(gx - kx) <= 3 and abs(gy - ky) <= 3:
+                            matched_k = (kx, ky)
+                            break
+                    if matched_k:
+                        non_canon_candidates[matched_k].append(float(max_val))
+                    else:
+                        non_canon_candidates[(gx, gy)] = [float(max_val)]
+
+        # Check if non-canonical candidate should override canonical anchor
+        if non_canon_candidates:
+            best_nc_pos = None
+            best_nc_avg = 0.0
+            for pos, vals in non_canon_candidates.items():
+                avg_v = float(np.mean(vals))
+                if len(vals) >= (len(probe_indices) * 0.6) and avg_v > best_nc_avg:
+                    best_nc_avg = avg_v
+                    best_nc_pos = pos
+
+            if best_nc_pos and best_nc_avg >= 0.80 and canon_max_corr < 0.35:
+                best_x, best_y = best_nc_pos
 
         final_alpha = cv2.resize(base_alpha, (best_w, best_h))
         return best_x, best_y, best_w, best_h, final_alpha
