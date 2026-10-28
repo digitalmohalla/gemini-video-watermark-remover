@@ -349,6 +349,15 @@ class BatchManager:
 
         if profile and profile.watermark_found:
             on_log(f"[Profile] Aspect Ratio: {profile.aspect_ratio} ({profile.content_aspect_ratio} content). Watermark: {profile.width_wm}x{profile.height_wm} @ {profile.region_str} (Alpha: {int(profile.measured_alpha*100)}%)")
+        elif profile and not profile.watermark_found and not self.settings.get("force_mode", False):
+            on_log(f"[Profile] No watermark detected ({item.filename} is already clean). Preserving original video without modification.")
+            import shutil
+            shutil.copy2(item.input_path, str(out_path))
+            item.status = "completed"
+            item.progress_pct = 100.0
+            item.status_msg = "Clean (No Watermark Detected)"
+            self.save_queue()
+            return
 
         from .utils import is_image
         if is_image(item.input_path):

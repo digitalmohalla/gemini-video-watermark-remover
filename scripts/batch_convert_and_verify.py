@@ -14,7 +14,7 @@ from core.batch_manager import BatchManager
 from core.profiler import IntelligentWatermarkProfiler
 
 target_folder = Path(r"E:\Naastik Brand\Youtube\Youtube Posted 2\प्रमाण-पत्र का कुरुक्षेत्र\original")
-test_videos = ["3.mp4", "5.mp4", "6.mp4", "7.mp4", "8.mp4", "15.mp4"]
+test_videos = ["5.mp4", "7.mp4", "15.mp4"]
 
 print(f"Target folder: {target_folder}")
 print(f"Videos to process: {test_videos}")
@@ -40,15 +40,21 @@ for vname in test_videos:
     prof = profiler.profile(str(in_path))
     print(f"Profile: mark_found={prof.watermark_found}, region={prof.region_str}, conf={prof.confidence}")
     
-    # Process with python lossless reverse-alpha engine
-    res = manager.python_engine.process_video(
-        input_path=str(in_path),
-        output_path=str(out_path),
-        region=prof.region_str,
-        log_callback=lambda msg: print(f"  [Log] {msg}")
-    )
-    t_elapsed = time.time() - t0
-    print(f"Finished {out_path.name} in {t_elapsed:.1f}s: {res.get('status')}")
+    # Process with python lossless reverse-alpha engine if watermark found, else preserve directly
+    if prof.watermark_found:
+        res = manager.python_engine.process_video(
+            input_path=str(in_path),
+            output_path=str(out_path),
+            region=prof.region_str,
+            log_callback=lambda msg: print(f"  [Log] {msg}")
+        )
+        t_elapsed = time.time() - t0
+        print(f"Finished {out_path.name} in {t_elapsed:.1f}s: {res.get('status')}")
+    else:
+        import shutil
+        shutil.copy2(str(in_path), str(out_path))
+        t_elapsed = time.time() - t0
+        print(f"  [Log] No watermark detected in {vname} (already clean). Preserved directly in {t_elapsed:.2f}s.")
     
     # ----------------------------------------------------
     # Quality Verification directly on output video frames

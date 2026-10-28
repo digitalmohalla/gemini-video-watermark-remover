@@ -65,21 +65,38 @@ class PythonFrameEngine:
         Supports explicit region overrides (e.g. from profiler) or
         automatic multi-frame template matching.
         """
-        # If explicit region override is provided (e.g. '1136,576,48,48' or 'x,y,w,h')
-        if region_override and "," in region_override:
+        # If explicit region override is provided (e.g. '1136,576,48,48', 'br:96,96,48,48')
+        if region_override:
             try:
-                parts = [int(v.strip()) for v in region_override.split(",")[:4]]
-                if len(parts) == 4:
-                    rx, ry, rw, rh = parts
-                    base_alpha = self.alpha_96 if (rw >= 72 and self.alpha_96 is not None) else self.alpha_48
-                    if base_alpha is None:
-                        size = rw
-                        y, x = np.ogrid[:size, :size]
-                        c = size // 2
-                        dist = np.sqrt((x - c)**2 + (y - c)**2)
-                        base_alpha = (np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5)[:, :, None] * 0.61
-                    final_alpha = cv2.resize(base_alpha, (rw, rh))
-                    return rx, ry, rw, rh, final_alpha
+                raw = region_override.strip()
+                if raw.startswith("br:"):
+                    parts = [int(v.strip()) for v in raw[3:].split(",")[:4]]
+                    if len(parts) == 4:
+                        mx, my, rw, rh = parts
+                        rx = max(0, width - mx - rw)
+                        ry = max(0, height - my - rh)
+                        base_alpha = self.alpha_96 if (rw >= 72 and self.alpha_96 is not None) else self.alpha_48
+                        if base_alpha is None:
+                            size = rw
+                            y, x = np.ogrid[:size, :size]
+                            c = size // 2
+                            dist = np.sqrt((x - c)**2 + (y - c)**2)
+                            base_alpha = (np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5)[:, :, None] * 0.61
+                        final_alpha = cv2.resize(base_alpha, (rw, rh))
+                        return rx, ry, rw, rh, final_alpha
+                elif "," in raw:
+                    parts = [int(v.strip()) for v in raw.split(",")[:4]]
+                    if len(parts) == 4:
+                        rx, ry, rw, rh = parts
+                        base_alpha = self.alpha_96 if (rw >= 72 and self.alpha_96 is not None) else self.alpha_48
+                        if base_alpha is None:
+                            size = rw
+                            y, x = np.ogrid[:size, :size]
+                            c = size // 2
+                            dist = np.sqrt((x - c)**2 + (y - c)**2)
+                            base_alpha = (np.clip(1.0 - (dist / (size // 2)), 0.0, 1.0) ** 1.5)[:, :, None] * 0.61
+                        final_alpha = cv2.resize(base_alpha, (rw, rh))
+                        return rx, ry, rw, rh, final_alpha
             except Exception:
                 pass
 
@@ -131,12 +148,16 @@ class PythonFrameEngine:
 
         non_canon_candidates: Dict[Tuple[int, int], List[float]] = {}
 
+        acc_map = np.zeros((sh - target_size + 1, sw - target_size + 1), dtype=np.float32)
+        valid_probes = 0
+
         for f_idx in probe_indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
             ret, frame = cap.read()
             if not ret or frame is None:
                 continue
 
+            valid_probes += 1
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
             # 1. Canonical anchor evaluation
@@ -150,40 +171,24 @@ class PythonFrameEngine:
                 if c_max > canon_max_corr:
                     canon_max_corr = float(c_max)
 
-            # 2. Wide search for candidates
+            # 2. Wide search accumulation
             search_region = gray_frame[sy:sy + sh, sx:sx + sw]
             if search_region.shape[0] >= target_size and search_region.shape[1] >= target_size:
                 res = cv2.matchTemplate(search_region, alpha_gray, cv2.TM_CCOEFF_NORMED)
-                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+                acc_map += np.maximum(0, res)
 
-                gx = sx + max_loc[0]
-                gy = sy + max_loc[1]
+        if valid_probes > 0:
+            acc_map /= valid_probes
+            _, peak_acc_corr, _, max_loc = cv2.minMaxLoc(acc_map)
+            peak_gx = sx + max_loc[0]
+            peak_gy = sy + max_loc[1]
 
-                if abs(gx - canon_x) <= 10 and abs(gy - canon_y) <= 10:
-                    pass
-                elif max_val >= 0.45:
-                    matched_k = None
-                    for (kx, ky) in non_canon_candidates.keys():
-                        if abs(gx - kx) <= 3 and abs(gy - ky) <= 3:
-                            matched_k = (kx, ky)
-                            break
-                    if matched_k:
-                        non_canon_candidates[matched_k].append(float(max_val))
-                    else:
-                        non_canon_candidates[(gx, gy)] = [float(max_val)]
-
-        # Check if non-canonical candidate should override canonical anchor
-        if non_canon_candidates:
-            best_nc_pos = None
-            best_nc_avg = 0.0
-            for pos, vals in non_canon_candidates.items():
-                avg_v = float(np.mean(vals))
-                if len(vals) >= (len(probe_indices) * 0.6) and avg_v > best_nc_avg:
-                    best_nc_avg = avg_v
-                    best_nc_pos = pos
-
-            if best_nc_pos and best_nc_avg >= 0.80 and canon_max_corr < 0.35:
-                best_x, best_y = best_nc_pos
+            if canon_max_corr >= 0.42:
+                best_x, best_y = canon_x, canon_y
+            elif peak_acc_corr >= 0.42:
+                best_x, best_y = peak_gx, peak_gy
+            else:
+                best_x, best_y = canon_x, canon_y
 
         final_alpha = cv2.resize(base_alpha, (best_w, best_h))
         return best_x, best_y, best_w, best_h, final_alpha
