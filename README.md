@@ -26,6 +26,11 @@ Online utilities like `geminiwatermarkremover.io` rely on in-browser HTML5 `<can
 
 ## 🚀 Key Features
 
+* **Intelligent Video & Watermark Profiler (No Guessing)**:
+  * **Direct Frame Extraction**: Instead of assuming fixed coordinates or standard resolutions, the tool samples video frames directly to discover the exact watermark position, dynamic scale (14×14 to 96×96), and mark type (`diamond` or `veo`).
+  * **Dynamic Aspect Ratio Support**: Intelligently detects and adapts to **16:9 Widescreen**, **9:16 Vertical/Portrait** (Shorts/Reels/TikTok), **1:1 Square**, **4:3**, **21:9 Ultrawide**, and non-standard custom aspect ratios.
+  * **Automatic Letterbox / Pillarbox Trimming**: Detects black padding bars from mobile screen captures or cinematic aspect ratios so watermarks inside the content area are never missed.
+  * **Pixel-Contrast Alpha Measurement**: Measures the video's actual alpha opacity directly from the pixels, preventing under- or over-subtraction.
 * **Dual Media Support (Videos & Static Images)**:
   * Seamlessly batch processes both **Videos** (`.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`, `.m4v`, `.flv`) and **Static Images** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`) in the exact same queue.
   * Instant reverse-alpha restoration for Gemini-generated images (< 50ms per image) with auto size detection (48×48 / 96×96).

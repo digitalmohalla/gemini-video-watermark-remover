@@ -256,6 +256,7 @@ class NativeEngine:
         self,
         input_path: str,
         output_path: str,
+        region: Optional[str] = None,
         denoise_mode: str = "off",
         force_mode: bool = False,
         progress_callback: Optional[Callable[[float, int, int, float, str], None]] = None,
@@ -274,6 +275,20 @@ class NativeEngine:
             return {"status": "error", "message": f"Input file not found: {in_p}"}
 
         start_time = time.time()
+
+        # If an explicit region was discovered from frame profiling, run directly
+        if region and region.strip():
+            cmd_exact = [
+                str(self.exe_path),
+                "-i", str(in_p),
+                "-o", str(out_p),
+                "-f",
+                "--region", region.strip(),
+                "--denoise", denoise_mode if denoise_mode in ("ai", "off", "soft", "ns", "telea") else "off",
+            ]
+            res_exact = self._execute_cli(cmd_exact, start_time, out_p, progress_callback, log_callback)
+            if res_exact.get("status") == "success":
+                return res_exact
         im = cv2.imread(str(in_p))
         if im is None:
             return {"status": "error", "message": "Failed to read image with OpenCV"}

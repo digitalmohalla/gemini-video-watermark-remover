@@ -578,9 +578,44 @@ header {
 
 .card-meta {
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
   font-size: 0.76rem;
   color: var(--text-muted);
+}
+
+.badge-tag {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.badge-bars {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.card-wm-detected {
+  font-size: 0.75rem;
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.card-wm-detected code {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #7dd3fc;
+  font-family: monospace;
 }
 
 .card-progress-bar {

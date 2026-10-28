@@ -21,6 +21,7 @@ from .utils import (
 )
 from .native_engine import NativeEngine
 from .python_engine import PythonFrameEngine
+from .profiler import IntelligentWatermarkProfiler
 
 
 class BatchItem:
@@ -41,6 +42,12 @@ class BatchItem:
         self.duration_sec = meta.get("duration_sec", 0.0)
         self.fps = meta.get("fps", 30.0)
         self.total_frames = meta.get("total_frames", 0)
+
+        # Extract intelligent watermark & aspect ratio profile directly from media
+        try:
+            self.profile = IntelligentWatermarkProfiler().profile(self.input_path)
+        except Exception:
+            self.profile = None
 
         # Status tracking
         self.status = "pending"  # "pending", "processing", "completed", "error", "cancelled"
@@ -75,6 +82,16 @@ class BatchItem:
             "output_path": self.output_path,
             "elapsed_sec": self.elapsed_sec,
             "has_thumbnail": self.thumbnail is not None,
+            "aspect_ratio": self.profile.aspect_ratio if self.profile else "16:9",
+            "is_vertical": self.profile.is_vertical if self.profile else False,
+            "is_square": self.profile.is_square if self.profile else False,
+            "has_black_bars": self.profile.has_black_bars if self.profile else False,
+            "content_aspect_ratio": self.profile.content_aspect_ratio if self.profile else "16:9",
+            "watermark_found": self.profile.watermark_found if self.profile else False,
+            "watermark_confidence": self.profile.confidence if self.profile else 0.0,
+            "watermark_region": self.profile.region_str if self.profile else "br:auto",
+            "watermark_size": f"{self.profile.width_wm}x{self.profile.height_wm}" if self.profile else "48x48",
+            "measured_alpha": self.profile.measured_alpha if self.profile else 0.78,
         }
 
 
@@ -325,6 +342,14 @@ class BatchManager:
         engine_type = self.settings.get("engine", "native")
         res = {"status": "error", "message": "Unknown engine"}
 
+        profile = getattr(item, "profile", None)
+        region_override = profile.region_str if (profile and profile.watermark_found) else None
+        alpha_override = profile.measured_alpha if (profile and profile.watermark_found) else (self.settings.get("veo_alpha", 0.0) or None)
+        mark_override = profile.mark_type if (profile and profile.watermark_found) else self.settings.get("mark_type", "auto")
+
+        if profile and profile.watermark_found:
+            on_log(f"[Profile] Aspect Ratio: {profile.aspect_ratio} ({profile.content_aspect_ratio} content). Watermark: {profile.width_wm}x{profile.height_wm} @ {profile.region_str} (Alpha: {int(profile.measured_alpha*100)}%)")
+
         from .utils import is_image
         if is_image(item.input_path):
             # Process as Static Image (Gemini Diamond Reverse-Alpha)
@@ -333,8 +358,9 @@ class BatchManager:
                 res = self.native_engine.process_image(
                     input_path=item.input_path,
                     output_path=str(out_path),
+                    region=region_override,
                     denoise_mode=self.settings.get("denoise_mode", "off"),
-                    force_mode=self.settings.get("force_mode", False),
+                    force_mode=True if region_override else self.settings.get("force_mode", False),
                     progress_callback=on_progress,
                     log_callback=on_log,
                 )
@@ -362,11 +388,12 @@ class BatchManager:
             res = self.native_engine.process_video(
                 input_path=item.input_path,
                 output_path=str(out_path),
-                mark_type=self.settings.get("mark_type", "auto"),
+                mark_type=mark_override,
                 denoise_mode=self.settings.get("denoise_mode", "off"),
-                force_mode=self.settings.get("force_mode", False),
+                force_mode=True if region_override else self.settings.get("force_mode", False),
                 force_cpu=self.settings.get("force_cpu", False),
-                veo_alpha=self.settings.get("veo_alpha", 0.0) or None,
+                region=region_override,
+                veo_alpha=alpha_override,
                 video_width=item.width,
                 video_height=item.height,
                 auto_retry=self.settings.get("auto_retry", True),

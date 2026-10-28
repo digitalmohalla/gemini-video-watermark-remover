@@ -381,10 +381,19 @@ function renderQueue() {
           </div>
           <div class="card-meta">
             <span>📐 ${item.resolution}</span>
+            <span class="badge-tag">${item.aspect_ratio || '16:9'}</span>
+            ${item.is_vertical ? `<span class="badge-tag">📱 9:16 Vertical</span>` : ''}
+            ${item.is_square ? `<span class="badge-tag">⏹ 1:1 Square</span>` : ''}
+            ${item.has_black_bars ? `<span class="badge-tag badge-bars">⬛ Letterbox (${item.content_aspect_ratio})</span>` : ''}
             ${item.duration === 'Image' || item.total_frames === 1 
               ? `<span>🖼 Image</span>` 
               : `<span>⏱ ${item.duration}</span><span>🎞 ${item.total_frames} frames</span>`}
             <span>💾 ${item.size_mb} MB</span>
+          </div>
+          <div class="card-wm-detected">
+            ${item.watermark_found 
+              ? `<span>🎯 <strong>${item.watermark_size}</strong> Diamond @ <code>${item.watermark_region}</code> (${Math.round(item.measured_alpha * 100)}% α) · <em>Extracted from media</em></span>`
+              : `<span>🔍 Auto multi-scale snap search active</span>`}
           </div>
           <div class="card-progress-bar">
             <div class="card-progress-fill" id="pfill-${item.id}" style="width: ${item.progress_pct}%;"></div>
