@@ -14,7 +14,7 @@ from core.batch_manager import BatchManager
 from core.profiler import IntelligentWatermarkProfiler
 
 target_folder = Path(r"E:\Naastik Brand\Youtube\Youtube Posted 2\प्रमाण-पत्र का कुरुक्षेत्र\original")
-test_videos = ["5.mp4", "7.mp4", "15.mp4"]
+test_videos = ["11.mp4", "14.mp4", "16.mp4", "20.mp4", "25.mp4"]
 
 print(f"Target folder: {target_folder}")
 print(f"Videos to process: {test_videos}")
@@ -31,14 +31,14 @@ for vname in test_videos:
         print(f"Warning: {in_path} does not exist!")
         continue
         
-    print(f"\n==========================================")
-    print(f"Processing: {vname} -> {out_path.name}")
-    print(f"==========================================")
+    print(f"\n==========================================", flush=True)
+    print(f"Processing: {vname} -> {out_path.name}", flush=True)
+    print(f"==========================================", flush=True)
     
     t0 = time.time()
     # Profile video
     prof = profiler.profile(str(in_path))
-    print(f"Profile: mark_found={prof.watermark_found}, region={prof.region_str}, conf={prof.confidence}")
+    print(f"Profile: mark_found={prof.watermark_found}, region={prof.region_str}, conf={prof.confidence}", flush=True)
     
     # Process with python lossless reverse-alpha engine if watermark found, else preserve directly
     if prof.watermark_found:
@@ -46,15 +46,15 @@ for vname in test_videos:
             input_path=str(in_path),
             output_path=str(out_path),
             region=prof.region_str,
-            log_callback=lambda msg: print(f"  [Log] {msg}")
+            log_callback=lambda msg: print(f"  [Log] {msg}", flush=True)
         )
         t_elapsed = time.time() - t0
-        print(f"Finished {out_path.name} in {t_elapsed:.1f}s: {res.get('status')}")
+        print(f"Finished {out_path.name} in {t_elapsed:.1f}s: {res.get('status')}", flush=True)
     else:
         import shutil
         shutil.copy2(str(in_path), str(out_path))
         t_elapsed = time.time() - t0
-        print(f"  [Log] No watermark detected in {vname} (already clean). Preserved directly in {t_elapsed:.2f}s.")
+        print(f"  [Log] No watermark detected in {vname} (already clean). Preserved directly in {t_elapsed:.2f}s.", flush=True)
     
     # ----------------------------------------------------
     # Quality Verification directly on output video frames
@@ -63,7 +63,7 @@ for vname in test_videos:
     cap_o = cv2.VideoCapture(str(in_path))
     
     total = int(cap_c.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"Verifying {out_path.name} ({total} frames)...")
+    print(f"Verifying {out_path.name} ({total} frames)...", flush=True)
     
     # Test frames at 20%, 50%, 80%
     corrs_orig = []
@@ -96,16 +96,16 @@ for vname in test_videos:
         if r == 0.50:
             crop_save_path = root_dir / f"verify_{vname.replace('.mp4', '')}_clean_f{fidx}.png"
             cv2.imwrite(str(crop_save_path), fc[max(0, wy-20):min(fc.shape[0], wy+wh+20), max(0, wx-20):min(fc.shape[1], wx+ww+20)])
-            print(f"  Saved verification crop: {crop_save_path.name}")
+            print(f"  Saved verification crop: {crop_save_path.name}", flush=True)
             
     cap_o.release()
     cap_c.release()
     
     avg_orig = np.mean(corrs_orig) if corrs_orig else 0.0
     avg_clean = np.mean(corrs_clean) if corrs_clean else 0.0
-    print(f"  Quality metrics for {vname}:")
-    print(f"    Original template correlation: {avg_orig:.3f}")
-    print(f"    Cleaned template correlation:  {avg_clean:.3f} (Lower/negative is better; <0.10 means logo removed)")
-    print(f"    Status: {'EXCELLENT (LOGO REMOVED)' if avg_clean < 0.15 else 'CHECK NEEDED'}")
+    print(f"  Quality metrics for {vname}:", flush=True)
+    print(f"    Original template correlation: {avg_orig:.3f}", flush=True)
+    print(f"    Cleaned template correlation:  {avg_clean:.3f} (Lower/negative is better; <0.10 means logo removed)", flush=True)
+    print(f"    Status: {'EXCELLENT (LOGO REMOVED)' if avg_clean < 0.15 else 'CHECK NEEDED'}", flush=True)
 
-print("\nAll videos processed and verified!")
+print("\nAll videos processed and verified!", flush=True)
